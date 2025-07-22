@@ -1,0 +1,30 @@
+version: '3'
+services:
+  mongo:
+    image: mongo:5
+    container_name: runbook-mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo-data:/data/db
+
+  backend:
+    build: ./backend
+    container_name: runbook-backend
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGO_URL=mongodb://mongo:27017/runbook
+    depends_on:
+      - mongo
+
+  frontend:
+    build: ./frontend
+    container_name: runbook-frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend 
