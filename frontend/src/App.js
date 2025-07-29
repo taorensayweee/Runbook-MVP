@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   AppBar, Toolbar, Typography, Container, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, IconButton, List, ListItem, ListItemText, ListItemSecondaryAction, Paper, Box, Tabs, Tab,
@@ -7,7 +7,8 @@ import {
 import { Add, Delete, Edit, Save, UploadFile, DragIndicator } from '@mui/icons-material';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import axios from 'axios';
-import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import debounce from 'lodash.debounce';
 
 function App() {
   const [tab, setTab] = useState(0);
@@ -15,6 +16,11 @@ function App() {
   const [executions, setExecutions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // 创建API实例
+  const api = axios.create({
+    baseURL: '/api'
+  });
 
   // Runbook Dialog
   const [openRunbookDialog, setOpenRunbookDialog] = useState(false);
@@ -24,17 +30,23 @@ function App() {
   const [openExecDialog, setOpenExecDialog] = useState(false);
   const [selectedRunbookId, setSelectedRunbookId] = useState(null);
   const [selectedExecution, setSelectedExecution] = useState(null);
-
-  // 1. 执行记录详情弹窗状态
   const [openExecDetail, setOpenExecDetail] = useState(false);
+  
+  // 添加备注文本状态
+  const [remarkTexts, setRemarkTexts] = useState({});
+  const [pendingRemarkUpdates, setPendingRemarkUpdates] = useState({});
 
-  // Snackbar
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  // Snackbar状态
+  const [snackbar, setSnackbar] = useState({ open: false, message: '' });
 
-  // API base
-  const api = axios.create({ baseURL: '/api' });
+  // 1. 执行弹窗表单状态
+  const [execForm, setExecForm] = useState({ incidentId: '', operator: '', priority: '中' });
 
-  // Runbook 新建/编辑弹窗及 Checklist 步骤编辑
+  // 计算派生状态
+  const selectedRunbook = runbooks.find(rb => rb._id === selectedRunbookId);
+  const filteredExecutions = executions.filter(e => e.runbookId === (selectedRunbook?._id || ''));
+
+  // React Hook Form for Runbook editing
   const {
     control,
     handleSubmit,
@@ -49,89 +61,170 @@ function App() {
       steps: []
     }
   });
-  const { fields, append, remove, move } = useFieldArray({ control, name: 'steps' });
 
-  // 1. 新增选中Runbook状态
-  const selectedRunbook = runbooks.find(rb => rb._id === selectedRunbookId) || runbooks[0];
-  const filteredExecutions = executions.filter(e => e.runbookId === (selectedRunbook?._id || ''));
+  // Field array for steps
+  const { fields, move, append, remove } = useFieldArray({
+    control,
+    name: 'steps'
+  });
 
-  // 1. 执行弹窗表单状态
-  const [execForm, setExecForm] = useState({ incidentId: '', operator: '', priority: '中' });
-
-  // 2. 打开执行弹窗时，重置表单
-  useEffect(() => {
-    if (openExecDialog && selectedRunbook) {
-      setExecForm({ incidentId: '', operator: '', priority: '中' });
+  // 为执行记录详情创建一个独立的表单控制
+  const {
+    control: executionControl,
+    handleSubmit: handleExecutionSubmit,
+    reset: resetExecutionForm,
+    setValue: setExecutionValue,
+    watch: watchExecution
+  } = useForm({
+    defaultValues: {
+      steps: []
     }
-  }, [openExecDialog, selectedRunbook]);
+  });
+  
+  // 用于存储待处理的备注更新定时器
+  const pendingRemarkTimeouts = useRef({});
+  
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      Object.values(pendingRemarkTimeouts.current).forEach(timeout => clearTimeout(timeout));
+    };
+  }, []);
 
-  // 3. 提交执行记录
-  const handleExecSubmit = async () => {
-    if (!selectedRunbook) return;
+  // 当选择的执行记录改变时，重置表单
+  useEffect(() => {
+    if (selectedExecution) {
+      const stepDefaults = selectedExecution.steps.map(step => ({
+        remarkText: step.remarkText || '',
+        remarkImage: step.remarkImage || ''
+      }));
+      resetExecutionForm({ steps: stepDefaults });
+    }
+  }, [selectedExecution, resetExecutionForm]);
+
+  // 加载数据
+  useEffect(() => {
+    fetchRunbooks();
+    fetchExecutions();
+  }, []);
+
+  const fetchRunbooks = async () => {
     setLoading(true);
     try {
-      const res = await api.post('/executions', {
-        runbookId: selectedRunbook._id,
-        runbookTitle: selectedRunbook.title,
-        incidentId: execForm.incidentId,
-        operator: execForm.operator,
-        priority: execForm.priority
-      });
-      setSnackbar({ open: true, message: '执行记录已创建', severity: 'success' });
-      setOpenExecDialog(false);
-      fetchExecutions();
-      setSelectedExecution(res.data); // 自动弹出详情
+      const res = await api.get('/runbooks');
+      setRunbooks(res.data);
     } catch (e) {
-      setSnackbar({ open: true, message: '创建执行记录失败', severity: 'error' });
+      setError('加载Runbook失败');
     } finally {
       setLoading(false);
+    }
+  };
+  const fetchExecutions = async () => {
+    try {
+      const res = await api.get('/executions');
+      setExecutions(res.data);
+    } catch (e) {
+      setError('加载执行记录失败');
     }
   };
 
   // 2. 打开详情弹窗
   const handleViewExecution = (exec) => {
     setSelectedExecution(exec);
+    // 初始化备注文本的本地状态
+    const initialRemarkTexts = {};
+    const initialPendingRemarkUpdates = {};
+    exec.steps.forEach((step, index) => {
+      initialRemarkTexts[index] = step.remarkText || '';
+      initialPendingRemarkUpdates[index] = step.remarkText || '';
+    });
+    setRemarkTexts(initialRemarkTexts);
+    setPendingRemarkUpdates(initialPendingRemarkUpdates);
+    
+    // 初始化执行记录详情表单
+    const stepDefaults = exec.steps.map(step => ({
+      remarkText: step.remarkText || '',
+      remarkImage: step.remarkImage || ''
+    }));
+    resetExecutionForm({ steps: stepDefaults });
+    
     setOpenExecDetail(true);
   };
 
   // 3. 步骤勾选、备注、图片 PATCH
   const handleStepUpdate = async (stepIdx, patch) => {
     if (!selectedExecution) return;
-    setLoading(true);
-    try {
-      const res = await api.patch(`/executions/${selectedExecution._id}/step/${stepIdx}`, patch);
-      setSelectedExecution(res.data);
-      fetchExecutions();
-      // 如果是最后一步且已全部勾选，自动 PATCH finishedAt
-      const allChecked = res.data.steps.every(s => s.checked);
-      if (allChecked && !res.data.finishedAt) {
-        await api.put(`/executions/${selectedExecution._id}`, { ...res.data, finishedAt: new Date() });
+    
+    // 对于勾选框更新，立即发送请求
+    if (patch.checked !== undefined) {
+      setLoading(true);
+      try {
+        const res = await api.patch(`/executions/${selectedExecution._id}/step/${stepIdx}`, patch);
+        setSelectedExecution(res.data);
         fetchExecutions();
+        // 如果是最后一步且已全部勾选，自动 PATCH finishedAt
+        const allChecked = res.data.steps.every(s => s.checked);
+        if (allChecked && !res.data.finishedAt) {
+          await api.put(`/executions/${selectedExecution._id}`, { ...res.data, finishedAt: new Date() });
+          fetchExecutions();
+        }
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
+    } else {
+      // 对于备注文本更新，添加到批量更新队列
+      addToBatchUpdate(stepIdx, patch);
     }
   };
 
-  useEffect(() => {
-    if (editingRunbook) {
-      reset({
-        title: editingRunbook.title,
-        description: editingRunbook.description,
-        steps: editingRunbook.steps || []
-      });
+  // 批量更新队列
+  const batchUpdateQueue = useRef([]);
+
+  // 添加到批量更新队列
+  const addToBatchUpdate = (stepIdx, patch) => {
+    const queue = batchUpdateQueue.current;
+    
+    // 检查是否已存在对该步骤的更新，如果有则替换
+    const existingIndex = queue.findIndex(item => item.stepIdx === stepIdx);
+    if (existingIndex >= 0) {
+      queue[existingIndex] = { stepIdx, patch };
     } else {
-      reset({ title: '', description: '', steps: [] });
+      queue.push({ stepIdx, patch });
     }
-  }, [editingRunbook, openRunbookDialog, reset]);
+    
+    // 触发防抖批量更新
+    debouncedBatchUpdate.current();
+  };
+
+  // 防抖批量更新函数
+  const debouncedBatchUpdate = useRef(null);
 
   useEffect(() => {
-    // 默认选中第一个Runbook
-    if (runbooks.length && !selectedRunbookId) {
-      setSelectedRunbookId(runbooks[0]._id);
-    }
-  }, [runbooks, selectedRunbookId]);
+    // 初始化debounced函数
+    debouncedBatchUpdate.current = debounce(async () => {
+      if (!selectedExecution || batchUpdateQueue.current.length === 0) return;
+      
+      try {
+        const updates = [...batchUpdateQueue.current];
+        batchUpdateQueue.current = []; // 清空队列
+        
+        const res = await api.patch(`/executions/${selectedExecution._id}/steps/batch`, { updates });
+        setSelectedExecution(res.data);
+        fetchExecutions();
+      } catch (error) {
+        console.error('批量更新备注失败:', error);
+      }
+    }, 300); // 缩短防抖时间到300ms
 
+    // 清理函数
+    return () => {
+      if (debouncedBatchUpdate.current) {
+        debouncedBatchUpdate.current.cancel();
+      }
+    };
+  }, [selectedExecution]);
+
+  // 保存Runbook
   const onSubmitRunbook = async (data) => {
     setLoading(true);
     try {
@@ -165,41 +258,56 @@ function App() {
     }
   };
 
-  const handleStepImageUpload = async (file, idx) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const res = await api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setValue(`steps.${idx}.image`, res.data.url);
-      setSnackbar({ open: true, message: '图片上传成功', severity: 'success' });
-    } catch (e) {
-      setSnackbar({ open: true, message: '图片上传失败', severity: 'error' });
-    }
-  };
-
-  // 加载数据
-  useEffect(() => {
-    fetchRunbooks();
-    fetchExecutions();
-  }, []);
-
-  const fetchRunbooks = async () => {
+  const handleExecSubmit = async () => {
+    if (!selectedRunbook) return;
     setLoading(true);
     try {
-      const res = await api.get('/runbooks');
-      setRunbooks(res.data);
+      const res = await api.post('/executions', {
+        runbookId: selectedRunbook._id,
+        runbookTitle: selectedRunbook.title,
+        incidentId: execForm.incidentId,
+        operator: execForm.operator,
+        priority: execForm.priority
+      });
+      setSnackbar({ open: true, message: '执行记录已创建', severity: 'success' });
+      setOpenExecDialog(false);
+      fetchExecutions();
+      setSelectedExecution(res.data); // 自动弹出详情
+      
+      // 初始化备注文本的本地状态
+      const initialRemarkTexts = {};
+      const initialPendingRemarkUpdates = {};
+      res.data.steps.forEach((step, index) => {
+        initialRemarkTexts[index] = step.remarkText || '';
+        initialPendingRemarkUpdates[index] = step.remarkText || '';
+      });
+      setRemarkTexts(initialRemarkTexts);
+      setPendingRemarkUpdates(initialPendingRemarkUpdates);
+      
+      // 初始化执行记录详情表单
+      const stepDefaults = res.data.steps.map(step => ({
+        remarkText: step.remarkText || '',
+        remarkImage: step.remarkImage || ''
+      }));
+      resetExecutionForm({ steps: stepDefaults });
+      
+      setOpenExecDetail(true);
     } catch (e) {
-      setError('加载Runbook失败');
+      setSnackbar({ open: true, message: '创建执行记录失败', severity: 'error' });
     } finally {
       setLoading(false);
     }
   };
-  const fetchExecutions = async () => {
+
+  const handleStepImageUpload = async (file, stepIdx) => {
+    const formData = new FormData();
+    formData.append('file', file);
     try {
-      const res = await api.get('/executions');
-      setExecutions(res.data);
+      const res = await api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // 更新表单值
+      setValue(`steps.${stepIdx}.image`, res.data.url);
     } catch (e) {
-      setError('加载执行记录失败');
+      setSnackbar({ open: true, message: '上传图片失败', severity: 'error' });
     }
   };
 
@@ -236,7 +344,7 @@ function App() {
             <Paper>
               <List>
                 {filteredExecutions.length === 0 && <ListItem><ListItemText primary="暂无执行记录" /></ListItem>}
-                {filteredExecutions.map(exec => {
+                {filteredExecutions.map((exec, index) => {
                   let resolved = '';
                   if (exec.finishedAt && exec.startedAt) {
                     const sec = Math.round((new Date(exec.finishedAt) - new Date(exec.startedAt)) / 1000);
@@ -249,6 +357,7 @@ function App() {
                         secondary={`操作人: ${exec.operator || '-'} | 优先级: ${exec.priority || '-'} | 开始: ${exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '-'}${resolved ? ' | ' + resolved : ''}`}
                       />
                       <Button size="small" onClick={() => handleViewExecution(exec)}>查看</Button>
+                      <Button size="small" onClick={() => handleViewExecution(exec)}>编辑</Button>
                     </ListItem>
                   );
                 })}
@@ -391,7 +500,35 @@ function App() {
                       {step.link ? <MuiLink href={step.link} target="_blank">{step.text}</MuiLink> : <Typography>{step.text}</Typography>}
                       <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2 }}>
                         {step.executedAt && <Typography variant="caption" color="text.secondary">执行时间: {new Date(step.executedAt).toLocaleString()}</Typography>}
-                        <TextField size="small" label="备注" value={step.remarkText || ''} onChange={e => handleStepUpdate(idx, { remarkText: e.target.value })} sx={{ width: 200 }} />
+                        {/* 使用react-hook-form管理备注输入 */}
+                        <Controller
+                          name={`steps.${idx}.remarkText`}
+                          control={executionControl}
+                          render={({ field }) => {
+                            const [isComposing, setIsComposing] = useState(false);
+                            return (
+                              <TextField 
+                                {...field}
+                                size="small" 
+                                label="备注" 
+                                sx={{ width: 200 }}
+                                onCompositionStart={() => setIsComposing(true)}
+                                onCompositionEnd={() => {
+                                  setIsComposing(false);
+                                  // 中文输入完成后再触发更新
+                                  handleStepUpdate(idx, { remarkText: field.value });
+                                }}
+                                onChange={(e) => {
+                                  field.onChange(e);
+                                  // 非中文输入时立即触发更新
+                                  if (!isComposing) {
+                                    handleStepUpdate(idx, { remarkText: e.target.value });
+                                  }
+                                }}
+                              />
+                            );
+                          }}
+                        />
                         <Button component="label" startIcon={<UploadFile />} size="small">
                           {step.remarkImage ? '更换图片' : '上传图片'}
                           <input type="file" hidden accept="image/*" onChange={async e => {
@@ -399,6 +536,9 @@ function App() {
                               const formData = new FormData();
                               formData.append('file', e.target.files[0]);
                               const res = await api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+                              // 更新表单值
+                              setExecutionValue(`steps.${idx}.remarkImage`, res.data.url);
+                              // 同时更新服务器
                               handleStepUpdate(idx, { remarkImage: res.data.url });
                             }
                           }} />
@@ -416,8 +556,13 @@ function App() {
           <Button onClick={() => setOpenExecDetail(false)}>关闭</Button>
         </DialogActions>
       </Dialog>
+      <Snackbar open={snackbar.open} autoHideDuration={3000} onClose={() => setSnackbar(s => ({ ...s, open: false }))} anchorOrigin={{ vertical: 'top', horizontal: 'center' }}>
+        <Alert severity={snackbar.severity || 'info'} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
 
-export default App; 
+export default App;
