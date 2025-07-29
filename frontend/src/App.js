@@ -370,10 +370,28 @@ function App() {
                               justifyContent: 'flex-end',
                               mt: 2
                             }}>
-                              <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setEditingRunbook(rb); setOpenRunbookDialog(true); }}>编辑</Button>
+                              <Button size="small" variant="outlined" onClick={e => { 
+                                e.stopPropagation(); 
+                                setEditingRunbook(rb);
+                                reset({
+                                  title: rb.title,
+                                  description: rb.description,
+                                  steps: rb.steps
+                                });
+                                setOpenRunbookDialog(true);
+                              }}>编辑</Button>
                               <Button size="small" variant="outlined" color="error" onClick={e => { e.stopPropagation(); handleDeleteRunbook(rb._id); }}>删除</Button>
                               <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setSelectedRunbookId(rb._id); setOpenExecDialog(true); }}>执行</Button>
-                              <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setEditingRunbook(rb); setOpenRunbookDialog(true); }}>查看</Button>
+                              <Button size="small" variant="outlined" onClick={e => { 
+                                e.stopPropagation(); 
+                                setEditingRunbook(rb);
+                                reset({
+                                  title: rb.title,
+                                  description: rb.description,
+                                  steps: rb.steps
+                                });
+                                setOpenRunbookDialog(true);
+                              }}>查看</Button>
                             </Box>
                           </Paper>
                         )}
