@@ -10,7 +10,7 @@
     "ajv": "^8.17.1",
     "axios": "^1.6.8",
     "react": "^18.2.0",
-    "react-beautiful-dnd": "^13.1.1",
+    "@hello-pangea/dnd": "^16.3.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.49.2",
     "react-scripts": "^5.0.1"

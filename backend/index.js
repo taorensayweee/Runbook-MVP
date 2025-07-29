@@ -119,6 +119,30 @@ app.patch('/api/executions/:id/step/:stepIdx', async (req, res) => {
   res.json(execution);
 });
 
+// 批量更新多个步骤
+app.patch('/api/executions/:id/steps/batch', async (req, res) => {
+  const { updates } = req.body; // updates: [{ stepIdx, patch }, ...]
+  const execution = await Execution.findById(req.params.id);
+  if (!execution) return res.status(404).json({ error: 'Execution not found' });
+  
+  // 应用所有更新
+  updates.forEach(({ stepIdx, patch }) => {
+    const step = execution.steps[stepIdx];
+    if (!step) return;
+    
+    const { checked, remarkText, remarkImage } = patch;
+    if (typeof checked === 'boolean') {
+      step.checked = checked;
+      step.executedAt = checked ? new Date() : null;
+    }
+    if (typeof remarkText === 'string') step.remarkText = remarkText;
+    if (typeof remarkImage === 'string') step.remarkImage = remarkImage;
+  });
+  
+  await execution.save();
+  res.json(execution);
+});
+
 mongoose.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => {
     app.listen(PORT, () => {
