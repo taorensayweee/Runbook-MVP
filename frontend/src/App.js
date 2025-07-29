@@ -313,30 +313,77 @@ function App() {
 
   return (
     <Box>
-      <AppBar position="static">
+      <AppBar position="fixed" sx={{ 
+        zIndex: (theme) => theme.zIndex.drawer + 1,
+        height: 64,
+        justifyContent: 'center'
+      }}>
         <Toolbar>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>Runbook MVP</Typography>
         </Toolbar>
       </AppBar>
-      <Container sx={{ mt: 4 }} maxWidth="xl">
+      <Container sx={{ mt: '80px', pt: 2 }} maxWidth="xl">
         <Grid container spacing={2}>
           {/* 左侧菜单栏：Runbook卡片列表 */}
           <Grid item xs={12} md={4} lg={3}>
             <Button variant="contained" startIcon={<Add />} sx={{ mb: 2 }} fullWidth onClick={() => { setEditingRunbook(null); setOpenRunbookDialog(true); }}>新建Runbook</Button>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {runbooks.map(rb => (
-                <Paper key={rb._id} elevation={selectedRunbookId === rb._id ? 6 : 1} sx={{ p: 2, border: selectedRunbookId === rb._id ? '2px solid #1976d2' : '1px solid #eee', cursor: 'pointer', transition: '0.2s' }} onClick={() => setSelectedRunbookId(rb._id)}>
-                  <Typography variant="h6" noWrap>{rb.title}</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{rb.description}</Typography>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setEditingRunbook(rb); setOpenRunbookDialog(true); }}>编辑</Button>
-                    <Button size="small" variant="outlined" color="error" onClick={e => { e.stopPropagation(); handleDeleteRunbook(rb._id); }}>删除</Button>
-                    <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setSelectedRunbookId(rb._id); setOpenExecDialog(true); }}>执行</Button>
-                    <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setEditingRunbook(rb); setOpenRunbookDialog(true); }}>查看</Button>
+            <DragDropContext onDragEnd={result => {
+              if (!result.destination) return;
+              const items = Array.from(runbooks);
+              const [reorderedItem] = items.splice(result.source.index, 1);
+              items.splice(result.destination.index, 0, reorderedItem);
+              setRunbooks(items);
+            }}>
+              <Droppable droppableId="runbooks">
+                {(provided) => (
+                  <Box {...provided.droppableProps} ref={provided.innerRef} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {runbooks.map((rb, index) => (
+                      <Draggable key={rb._id} draggableId={rb._id} index={index}>
+                        {(provided) => (
+                          <Paper 
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            elevation={selectedRunbookId === rb._id ? 6 : 1} 
+                            sx={{ 
+                              p: 2,
+                              border: selectedRunbookId === rb._id ? '2px solid #1976d2' : '1px solid #eee',
+                              cursor: 'pointer',
+                              transition: '0.2s',
+                              display: 'flex',
+                              flexDirection: 'column'
+                            }} 
+                            onClick={() => setSelectedRunbookId(rb._id)}
+                          >
+                            <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
+                              <Box {...provided.dragHandleProps} sx={{ mr: 1 }}>
+                                <DragIndicator />
+                              </Box>
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography variant="h6" noWrap>{rb.title}</Typography>
+                                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }} noWrap>{rb.description}</Typography>
+                              </Box>
+                            </Box>
+                            <Box sx={{ 
+                              display: 'flex', 
+                              gap: 1, 
+                              flexWrap: 'wrap',
+                              justifyContent: 'flex-end',
+                              mt: 2
+                            }}>
+                              <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setEditingRunbook(rb); setOpenRunbookDialog(true); }}>编辑</Button>
+                              <Button size="small" variant="outlined" color="error" onClick={e => { e.stopPropagation(); handleDeleteRunbook(rb._id); }}>删除</Button>
+                              <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setSelectedRunbookId(rb._id); setOpenExecDialog(true); }}>执行</Button>
+                              <Button size="small" variant="outlined" onClick={e => { e.stopPropagation(); setEditingRunbook(rb); setOpenRunbookDialog(true); }}>查看</Button>
+                            </Box>
+                          </Paper>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
                   </Box>
-                </Paper>
-              ))}
-            </Box>
+                )}
+              </Droppable>
+            </DragDropContext>
           </Grid>
           {/* 右侧：执行记录列表 */}
           <Grid item xs={12} md={8} lg={9}>
@@ -368,7 +415,7 @@ function App() {
       </Container>
       {/* 其它弹窗和功能保持不变 */}
       {/* 在 return 语句后面添加 Runbook 弹窗 */}
-      <Dialog open={openRunbookDialog} onClose={() => setOpenRunbookDialog(false)} maxWidth="md" fullWidth>
+      <Dialog open={openRunbookDialog} onClose={() => setOpenRunbookDialog(false)} maxWidth="md" fullWidth sx={{ '& .MuiDialog-container': { mt: 8 } }}>
         <DialogTitle>{editingRunbook ? '编辑Runbook' : '新建Runbook'}</DialogTitle>
         <DialogContent>
           <Box component="form" onSubmit={handleSubmit(onSubmitRunbook)}>
@@ -462,7 +509,7 @@ function App() {
         </DialogActions>
       </Dialog>
       {/* 在 return 末尾添加执行弹窗 */}
-      <Dialog open={openExecDialog} onClose={() => setOpenExecDialog(false)} maxWidth="xs" fullWidth>
+      <Dialog open={openExecDialog} onClose={() => setOpenExecDialog(false)} maxWidth="xs" fullWidth sx={{ '& .MuiDialog-container': { mt: 8 } }}>
         <DialogTitle>新建执行记录</DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -481,7 +528,7 @@ function App() {
         </DialogActions>
       </Dialog>
       {/* 详情弹窗 */}
-      <Dialog open={openExecDetail && !!selectedExecution} onClose={() => setOpenExecDetail(false)} maxWidth="md" fullWidth>
+      <Dialog open={openExecDetail && !!selectedExecution} onClose={() => setOpenExecDetail(false)} maxWidth="md" fullWidth sx={{ '& .MuiDialog-container': { mt: 8 } }}>
         <DialogTitle>执行记录详情</DialogTitle>
         <DialogContent>
           {selectedExecution && (
